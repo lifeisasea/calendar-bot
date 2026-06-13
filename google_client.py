@@ -213,6 +213,49 @@ def search_events(query: str, time_min: dt.datetime, time_max: dt.datetime) -> l
     return res.get("items", [])
 
 
+# ---------- Напоминания (бот сам пишет в Telegram) ----------
+# Храним как события-метки в календаре, чтобы переживали перезапуски облака.
+REMINDER_TAG = "tg-reminder"
+
+
+def create_reminder(text: str, when: dt.datetime) -> dict:
+    """Поставить напоминание: бот напишет в Telegram в момент `when`."""
+    svc = calendar()
+    end = when + dt.timedelta(minutes=1)
+    body = {
+        "summary": f"⏰ {text}",
+        "description": REMINDER_TAG,
+        "start": {"dateTime": when.isoformat(), "timeZone": str(TZ)},
+        "end": {"dateTime": end.isoformat(), "timeZone": str(TZ)},
+        "reminders": {"useDefault": False, "overrides": []},
+    }
+    return svc.events().insert(calendarId="primary", body=body).execute()
+
+
+def due_reminders(now: dt.datetime) -> list[dict]:
+    """Напоминания, у которых наступило время и которые ещё не отправлены."""
+    svc = calendar()
+    res = svc.events().list(
+        calendarId="primary",
+        q=REMINDER_TAG,
+        timeMin=(now - dt.timedelta(days=2)).isoformat(),
+        timeMax=(now + dt.timedelta(seconds=30)).isoformat(),
+        singleEvents=True,
+        orderBy="startTime",
+    ).execute()
+    out = []
+    for e in res.get("items", []):
+        if (e.get("description") or "").strip() != REMINDER_TAG:
+            continue
+        s = e["start"].get("dateTime")
+        if not s:
+            continue
+        if dt.datetime.fromisoformat(s) <= now:
+            text = e.get("summary", "").replace("⏰", "", 1).strip()
+            out.append({"id": e["id"], "text": text})
+    return out
+
+
 def event_times(ev: dict) -> tuple[str, str]:
     """Вернуть (начало, конец) события в ISO-строках для удобства модели."""
     s = ev["start"].get("dateTime") or ev["start"].get("date")

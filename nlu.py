@@ -86,6 +86,22 @@ TOOLS = [
         },
     },
     {
+        "name": "add_reminder",
+        "description": (
+            "Поставить напоминание, чтобы БОТ сам написал в Telegram в указанное время "
+            "(для просьб «напомни мне …»). Это не всплывашка календаря, а сообщение от бота."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "О чём напомнить"},
+                "date": {"type": "string", "description": "Дата ГГГГ-ММ-ДД"},
+                "time": {"type": "string", "description": "Время ЧЧ:ММ"},
+            },
+            "required": ["text", "date", "time"],
+        },
+    },
+    {
         "name": "add_task",
         "description": (
             "Добавить задачу (дело с галочкой, не событие со временем). "
@@ -223,6 +239,14 @@ def _fmt_task(t: dict) -> str:
     return f"id={t['id']} | {t.get('title', '(без названия)')} (срок: {due})"
 
 
+def _run_add_reminder(args: dict) -> str:
+    d = dt.date.fromisoformat(args["date"])
+    hh, mm = map(int, args["time"].split(":"))
+    when = dt.datetime.combine(d, dt.time(hh, mm), tzinfo=gc.TZ)
+    gc.create_reminder(args["text"], when)
+    return f"Напоминание поставлено на {args['date']} {args['time']} ⏰"
+
+
 def _run_add_task(args: dict) -> str:
     due = dt.date.fromisoformat(args["due_date"]) if args.get("due_date") else None
     gc.add_task(args["title"], due=due, urgent=args.get("urgent", False))
@@ -287,6 +311,8 @@ def _execute(name: str, args: dict) -> str:
         return _run_update_event(args)
     if name == "delete_event":
         return _run_delete_event(args)
+    if name == "add_reminder":
+        return _run_add_reminder(args)
     if name == "add_task":
         return _run_add_task(args)
     if name == "list_tasks":
@@ -317,6 +343,9 @@ def answer(history) -> str:
         "«сделать до пятницы») — это ЗАДАЧА: используй add_task. Дело без даты идёт в бэклог. "
         "Срочные дела помечай urgent=true. Чтобы показать дела — list_tasks; отметить сделанным — "
         "complete_task; убрать — delete_task. Невыполненные задачи сами переносятся на сегодня. "
+        "Если просят «напомни мне …» (чтобы бот сам написал в Telegram в нужный момент) — "
+        "используй add_reminder. Если же нужна всплывашка-напоминание перед уже создаваемым "
+        "событием — это reminder_minutes у create_event. "
         "Если просьба опирается на уже существующее событие («перед концертом», «после рейса», "
         "«найди сам») — сначала найди его через find_events, возьми его время, и только потом считай. "
         "При поиске бери окно в несколько дней вокруг названной даты (события ночью могут попадать "

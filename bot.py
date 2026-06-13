@@ -81,6 +81,37 @@ async def deny(update: Update) -> None:
 WEEKDAYS = ["понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье"]
 
 
+async def keepalive(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Самопинг: держим бесплатный Render бодрым, чтобы напоминания шли вовремя."""
+    if not PUBLIC_URL:
+        return
+    import httpx
+
+    base = PUBLIC_URL if PUBLIC_URL.startswith("http") else f"https://{PUBLIC_URL}"
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            await c.get(base)
+    except Exception:  # noqa: BLE001 — 404/любой ответ ок, нам нужен сам факт запроса
+        pass
+
+
+async def check_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Раз в минуту: если у напоминания наступило время — пишем в Telegram."""
+    if not ALLOWED_USER_ID:
+        return
+    try:
+        now = dt.datetime.now(gc.TZ)
+        for r in gc.due_reminders(now):
+            await context.bot.send_message(
+                chat_id=int(ALLOWED_USER_ID),
+                text=f"⏰ Напоминание: {r['text']}",
+            )
+            gc.delete_event(r["id"])
+            log.info("Отправлено напоминание: %s", r["text"])
+    except Exception:  # noqa: BLE001
+        log.exception("Ошибка проверки напоминаний")
+
+
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_allowed(update):
         return await deny(update)
@@ -195,6 +226,12 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
+    if app.job_queue:
+        app.job_queue.run_repeating(check_reminders, interval=60, first=15)
+        log.info("Проверка напоминаний включена (каждые 60 сек)")
+        if PUBLIC_URL:
+            app.job_queue.run_repeating(keepalive, interval=600, first=60)
+            log.info("Самопинг включён (каждые 10 мин)")
     gc.refresh_tz()
     try:
         moved = gc.rollover_tasks()
