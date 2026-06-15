@@ -214,8 +214,46 @@ def search_events(query: str, time_min: dt.datetime, time_max: dt.datetime) -> l
 
 
 # ---------- Напоминания (бот сам пишет в Telegram) ----------
-# Храним как события-метки в календаре, чтобы переживали перезапуски облака.
+# Храним как события-метки в ОТДЕЛЬНОМ календаре (скрыт из основного вида),
+# чтобы не засорять основной календарь и переживать перезапуски облака.
 REMINDER_TAG = "tg-reminder"
+REMINDER_CAL_NAME = "🤖 Calendarik напоминания"
+_reminder_cal_id = None
+
+
+def reminder_calendar_id() -> str:
+    """Найти или создать отдельный (скрытый) календарь для напоминаний."""
+    global _reminder_cal_id
+    if _reminder_cal_id:
+        return _reminder_cal_id
+    svc = calendar()
+    page = None
+    while True:
+        cl = svc.calendarList().list(pageToken=page).execute()
+        for c in cl.get("items", []):
+            if c.get("summary") == REMINDER_CAL_NAME:
+                _reminder_cal_id = c["id"]
+                return _reminder_cal_id
+        page = cl.get("nextPageToken")
+        if not page:
+            break
+    created = svc.calendars().insert(
+        body={"summary": REMINDER_CAL_NAME, "timeZone": str(TZ)}
+    ).execute()
+    _reminder_cal_id = created["id"]
+    try:  # прячем из основного вида (галочка снята)
+        svc.calendarList().patch(
+            calendarId=_reminder_cal_id, body={"selected": False}
+        ).execute()
+    except Exception:  # noqa: BLE001
+        pass
+    return _reminder_cal_id
+
+
+def delete_reminder(event_id: str) -> None:
+    calendar().events().delete(
+        calendarId=reminder_calendar_id(), eventId=event_id
+    ).execute()
 
 
 def create_reminder(text: str, when: dt.datetime) -> dict:
@@ -229,7 +267,7 @@ def create_reminder(text: str, when: dt.datetime) -> dict:
         "end": {"dateTime": end.isoformat(), "timeZone": str(TZ)},
         "reminders": {"useDefault": False, "overrides": []},
     }
-    return svc.events().insert(calendarId="primary", body=body).execute()
+    return svc.events().insert(calendarId=reminder_calendar_id(), body=body).execute()
 
 
 def due_reminders(now: dt.datetime) -> list[dict]:
@@ -240,7 +278,7 @@ def due_reminders(now: dt.datetime) -> list[dict]:
     """
     svc = calendar()
     res = svc.events().list(
-        calendarId="primary",
+        calendarId=reminder_calendar_id(),
         q=REMINDER_TAG,
         timeMin=(now - dt.timedelta(days=2)).isoformat(),
         timeMax=(now + dt.timedelta(seconds=30)).isoformat(),
@@ -284,8 +322,10 @@ def create_recurring_reminder(
     """Повторяющееся напоминание. Возвращает число созданных правил."""
     svc = calendar()
 
+    cal_id = reminder_calendar_id()
+
     def _mk(start: dt.datetime, rrule: str) -> None:
-        svc.events().insert(calendarId="primary", body={
+        svc.events().insert(calendarId=cal_id, body={
             "summary": f"⏰ {text}",
             "description": REMINDER_TAG,
             "start": {"dateTime": start.isoformat(), "timeZone": str(TZ)},
@@ -315,8 +355,9 @@ def cancel_reminders(query: str) -> int:
     """Отменить напоминания (разовые и повторяющиеся), найденные по тексту."""
     svc = calendar()
     now = dt.datetime.now(TZ)
+    cal_id = reminder_calendar_id()
     res = svc.events().list(
-        calendarId="primary",
+        calendarId=cal_id,
         q=query,
         timeMin=(now - dt.timedelta(days=1)).isoformat(),
         timeMax=(now + dt.timedelta(days=400)).isoformat(),
@@ -330,7 +371,7 @@ def cancel_reminders(query: str) -> int:
         masters.add(e.get("recurringEventId") or e["id"])
     for mid in masters:
         try:
-            svc.events().delete(calendarId="primary", eventId=mid).execute()
+            svc.events().delete(calendarId=cal_id, eventId=mid).execute()
         except Exception:  # noqa: BLE001
             pass
     return len(masters)

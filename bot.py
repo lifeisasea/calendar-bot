@@ -115,7 +115,7 @@ async def check_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
             if r["recurring"]:
                 _fired_reminders[r["id"]] = now.timestamp()
             else:
-                gc.delete_event(r["id"])  # разовое — убираем, чтобы не повторялось
+                gc.delete_reminder(r["id"])  # разовое — убираем, чтобы не повторялось
         # чистим старые записи защиты от дублей
         cutoff = now.timestamp() - 3600
         for k in [k for k, v in _fired_reminders.items() if v < cutoff]:
