@@ -5,6 +5,7 @@ Telegram бот-календарь.
 Шаг 2 ✅ — читает Google Календарь: «что у меня сегодня / завтра / на неделе».
 Дальше: запись событий (Шаг 3) и умная понималка через Claude (Шаг 4).
 """
+import asyncio
 import datetime as dt
 import logging
 import os
@@ -24,9 +25,10 @@ def _ipv4_only(host, *args, **kwargs):
 socket.getaddrinfo = _ipv4_only
 
 from dotenv import load_dotenv
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     MessageHandler,
     filters,
@@ -95,6 +97,44 @@ async def keepalive(context: ContextTypes.DEFAULT_TYPE) -> None:
         pass
 
 
+REMINDER_PREFIX = "⏰ Напоминание: "
+TOMORROW_HOUR = 9  # «Завтра» = завтра в это время
+
+
+def reminder_keyboard() -> InlineKeyboardMarkup:
+    """Кнопки под напоминанием: отметить сделанным или отложить."""
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Сделано", callback_data="rem:done"),
+        InlineKeyboardButton("⏰ Напомнить позже", callback_data="rem:later"),
+    ]])
+
+
+def snooze_keyboard() -> InlineKeyboardMarkup:
+    """Меню выбора, на сколько отложить напоминание."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("15 мин", callback_data="rem:snooze:15"),
+            InlineKeyboardButton("Час", callback_data="rem:snooze:60"),
+            InlineKeyboardButton("Завтра", callback_data="rem:snooze:tomorrow"),
+        ],
+        [InlineKeyboardButton("‹ Назад", callback_data="rem:back")],
+    ])
+
+
+def snooze_target(choice: str, now: dt.datetime) -> tuple[dt.datetime, str]:
+    """По коду кнопки вернуть (когда напомнить, подпись для пользователя)."""
+    if choice == "15":
+        return now + dt.timedelta(minutes=15), "15 мин"
+    if choice == "60":
+        return now + dt.timedelta(hours=1), "час"
+    if choice == "tomorrow":
+        when = (now + dt.timedelta(days=1)).replace(
+            hour=TOMORROW_HOUR, minute=0, second=0, microsecond=0
+        )
+        return when, f"завтра в {TOMORROW_HOUR}:00"
+    raise ValueError(f"неизвестный вариант отсрочки: {choice}")
+
+
 _fired_reminders: dict = {}  # id повторяющегося срабатывания -> когда отправили (защита от дублей)
 
 
@@ -109,7 +149,8 @@ async def check_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
                 continue  # это срабатывание уже отправляли
             await context.bot.send_message(
                 chat_id=int(ALLOWED_USER_ID),
-                text=f"⏰ Напоминание: {r['text']}",
+                text=f"{REMINDER_PREFIX}{r['text']}",
+                reply_markup=reminder_keyboard(),
             )
             log.info("Отправлено напоминание: %s", r["text"])
             if r["recurring"]:
@@ -122,6 +163,51 @@ async def check_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
             del _fired_reminders[k]
     except Exception:  # noqa: BLE001
         log.exception("Ошибка проверки напоминаний")
+
+
+async def on_reminder_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Нажатие на кнопку под напоминанием: «Сделано» или «Напомнить позже»."""
+    query = update.callback_query
+    if not is_allowed(update):
+        await query.answer("Это личный бот 🙈")
+        return
+    data = query.data or ""
+
+    if data == "rem:done":
+        await query.answer("Готово ✅")
+        try:
+            await query.message.delete()  # убираем напоминание из чата
+        except Exception:  # noqa: BLE001 — старое сообщение удалить нельзя, хотя бы снимем кнопки
+            try:
+                await query.edit_message_text(f"✅ {query.message.text}")
+            except Exception:  # noqa: BLE001
+                pass
+        return
+
+    if data == "rem:later":  # раскрываем выбор отсрочки
+        await query.answer()
+        await query.edit_message_reply_markup(reply_markup=snooze_keyboard())
+        return
+
+    if data == "rem:back":  # назад к «Сделано / Напомнить позже»
+        await query.answer()
+        await query.edit_message_reply_markup(reply_markup=reminder_keyboard())
+        return
+
+    if data.startswith("rem:snooze:"):
+        choice = data.split(":", 2)[2]
+        text = (query.message.text or "").replace(REMINDER_PREFIX, "", 1).strip()
+        try:
+            when, label = snooze_target(choice, dt.datetime.now(gc.TZ))
+            await asyncio.to_thread(gc.create_reminder, text, when)
+            await query.answer(f"Напомню {label} ⏰")
+            await query.edit_message_text(
+                f"{REMINDER_PREFIX}{text}\n\n💤 Отложено: {label}"
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("Не удалось отложить напоминание")
+            await query.answer("Не получилось отложить 😕", show_alert=True)
+        return
 
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -237,6 +323,7 @@ def main() -> None:
     )
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
+    app.add_handler(CallbackQueryHandler(on_reminder_button, pattern="^rem:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
     if app.job_queue:
         app.job_queue.run_repeating(check_reminders, interval=60, first=15)
