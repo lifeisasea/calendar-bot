@@ -102,6 +102,38 @@ TOOLS = [
         },
     },
     {
+        "name": "add_recurring_reminder",
+        "description": (
+            "Повторяющееся напоминание от бота в Telegram: «каждый час», «каждый день в 8:00», "
+            "«по будням в 18:00», «каждый понедельник в 10:00»."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "О чём напоминать"},
+                "freq": {"type": "string", "enum": ["hourly", "daily", "weekly"]},
+                "time": {"type": "string", "description": "Время ЧЧ:ММ (для daily/weekly; для hourly — минута, напр. 00:00)"},
+                "hour_from": {"type": "integer", "description": "Для hourly: с какого часа (по умолч. 9)"},
+                "hour_to": {"type": "integer", "description": "Для hourly: по какой час (по умолч. 21)"},
+                "weekdays": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]},
+                    "description": "Для weekly: дни недели",
+                },
+            },
+            "required": ["text", "freq"],
+        },
+    },
+    {
+        "name": "cancel_reminder",
+        "description": "Отключить напоминание (разовое или повторяющееся) по тексту: «перестань напоминать про воду».",
+        "input_schema": {
+            "type": "object",
+            "properties": {"query": {"type": "string", "description": "Слово/фраза из напоминания"}},
+            "required": ["query"],
+        },
+    },
+    {
         "name": "add_task",
         "description": (
             "Добавить задачу (дело с галочкой, не событие со временем). "
@@ -247,6 +279,23 @@ def _run_add_reminder(args: dict) -> str:
     return f"Напоминание поставлено на {args['date']} {args['time']} ⏰"
 
 
+def _run_add_recurring_reminder(args: dict) -> str:
+    n = gc.create_recurring_reminder(
+        args["text"],
+        args["freq"],
+        time=args.get("time", "09:00"),
+        hour_from=args.get("hour_from", 9),
+        hour_to=args.get("hour_to", 21),
+        weekdays=args.get("weekdays"),
+    )
+    return f"Повторяющееся напоминание поставлено ({args['freq']}, правил: {n}) 🔁"
+
+
+def _run_cancel_reminder(args: dict) -> str:
+    n = gc.cancel_reminders(args["query"])
+    return f"Отключено напоминаний: {n} ✅" if n else "Не нашёл такого напоминания."
+
+
 def _run_add_task(args: dict) -> str:
     due = dt.date.fromisoformat(args["due_date"]) if args.get("due_date") else None
     gc.add_task(args["title"], due=due, urgent=args.get("urgent", False))
@@ -313,6 +362,10 @@ def _execute(name: str, args: dict) -> str:
         return _run_delete_event(args)
     if name == "add_reminder":
         return _run_add_reminder(args)
+    if name == "add_recurring_reminder":
+        return _run_add_recurring_reminder(args)
+    if name == "cancel_reminder":
+        return _run_cancel_reminder(args)
     if name == "add_task":
         return _run_add_task(args)
     if name == "list_tasks":
@@ -346,6 +399,9 @@ def answer(history) -> str:
         "Если просят «напомни мне …» (чтобы бот сам написал в Telegram в нужный момент) — "
         "используй add_reminder. Если же нужна всплывашка-напоминание перед уже создаваемым "
         "событием — это reminder_minutes у create_event. "
+        "Повторяющиеся напоминания («каждый час», «каждый день в 8», «по будням в 18:00») — "
+        "add_recurring_reminder (для hourly можно задать диапазон часов hour_from/hour_to). "
+        "Отключить напоминание — cancel_reminder. "
         "Если просьба опирается на уже существующее событие («перед концертом», «после рейса», "
         "«найди сам») — сначала найди его через find_events, возьми его время, и только потом считай. "
         "При поиске бери окно в несколько дней вокруг названной даты (события ночью могут попадать "

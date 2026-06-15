@@ -95,6 +95,9 @@ async def keepalive(context: ContextTypes.DEFAULT_TYPE) -> None:
         pass
 
 
+_fired_reminders: dict = {}  # id повторяющегося срабатывания -> когда отправили (защита от дублей)
+
+
 async def check_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Раз в минуту: если у напоминания наступило время — пишем в Telegram."""
     if not ALLOWED_USER_ID:
@@ -102,12 +105,21 @@ async def check_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         now = dt.datetime.now(gc.TZ)
         for r in gc.due_reminders(now):
+            if r["recurring"] and r["id"] in _fired_reminders:
+                continue  # это срабатывание уже отправляли
             await context.bot.send_message(
                 chat_id=int(ALLOWED_USER_ID),
                 text=f"⏰ Напоминание: {r['text']}",
             )
-            gc.delete_event(r["id"])
             log.info("Отправлено напоминание: %s", r["text"])
+            if r["recurring"]:
+                _fired_reminders[r["id"]] = now.timestamp()
+            else:
+                gc.delete_event(r["id"])  # разовое — убираем, чтобы не повторялось
+        # чистим старые записи защиты от дублей
+        cutoff = now.timestamp() - 3600
+        for k in [k for k, v in _fired_reminders.items() if v < cutoff]:
+            del _fired_reminders[k]
     except Exception:  # noqa: BLE001
         log.exception("Ошибка проверки напоминаний")
 

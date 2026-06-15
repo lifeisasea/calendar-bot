@@ -233,7 +233,11 @@ def create_reminder(text: str, when: dt.datetime) -> dict:
 
 
 def due_reminders(now: dt.datetime) -> list[dict]:
-    """Напоминания, у которых наступило время и которые ещё не отправлены."""
+    """
+    Напоминания, у которых наступило время.
+    Разовые — ловим с запасом (до 2 дней назад) и потом удаляем.
+    Повторяющиеся — только «свежие» (последние 5 мин), не удаляем.
+    """
     svc = calendar()
     res = svc.events().list(
         calendarId="primary",
@@ -250,10 +254,86 @@ def due_reminders(now: dt.datetime) -> list[dict]:
         s = e["start"].get("dateTime")
         if not s:
             continue
-        if dt.datetime.fromisoformat(s) <= now:
-            text = e.get("summary", "").replace("⏰", "", 1).strip()
-            out.append({"id": e["id"], "text": text})
+        start = dt.datetime.fromisoformat(s)
+        recurring = bool(e.get("recurringEventId"))
+        text = e.get("summary", "").replace("⏰", "", 1).strip()
+        if recurring:
+            if now - dt.timedelta(seconds=300) <= start <= now:
+                out.append({"id": e["id"], "text": text, "recurring": True})
+        elif start <= now:
+            out.append({"id": e["id"], "text": text, "recurring": False})
     return out
+
+
+WEEKDAYS_RRULE = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]
+
+
+def _today_at(hh: int, mm: int) -> dt.datetime:
+    return dt.datetime.now(TZ).replace(hour=hh, minute=mm, second=0, microsecond=0)
+
+
+def create_recurring_reminder(
+    text: str,
+    freq: str,
+    time: str = "09:00",
+    hour_from: int = 9,
+    hour_to: int = 21,
+    weekdays: list | None = None,
+    interval: int = 1,
+) -> int:
+    """Повторяющееся напоминание. Возвращает число созданных правил."""
+    svc = calendar()
+
+    def _mk(start: dt.datetime, rrule: str) -> None:
+        svc.events().insert(calendarId="primary", body={
+            "summary": f"⏰ {text}",
+            "description": REMINDER_TAG,
+            "start": {"dateTime": start.isoformat(), "timeZone": str(TZ)},
+            "end": {"dateTime": (start + dt.timedelta(minutes=1)).isoformat(), "timeZone": str(TZ)},
+            "recurrence": [rrule],
+            "reminders": {"useDefault": False, "overrides": []},
+        }).execute()
+
+    if freq == "hourly":
+        mm = int(time.split(":")[1]) if ":" in time else 0
+        for hh in range(hour_from, hour_to + 1):
+            _mk(_today_at(hh, mm), f"RRULE:FREQ=DAILY;INTERVAL={interval}")
+        return hour_to - hour_from + 1
+    if freq == "daily":
+        hh, mm = map(int, time.split(":"))
+        _mk(_today_at(hh, mm), f"RRULE:FREQ=DAILY;INTERVAL={interval}")
+        return 1
+    if freq == "weekly":
+        hh, mm = map(int, time.split(":"))
+        days = weekdays or ["MO", "TU", "WE", "TH", "FR"]
+        _mk(_today_at(hh, mm), f"RRULE:FREQ=WEEKLY;BYDAY={','.join(days)}")
+        return 1
+    raise ValueError(f"неизвестная частота: {freq}")
+
+
+def cancel_reminders(query: str) -> int:
+    """Отменить напоминания (разовые и повторяющиеся), найденные по тексту."""
+    svc = calendar()
+    now = dt.datetime.now(TZ)
+    res = svc.events().list(
+        calendarId="primary",
+        q=query,
+        timeMin=(now - dt.timedelta(days=1)).isoformat(),
+        timeMax=(now + dt.timedelta(days=400)).isoformat(),
+        singleEvents=True,
+        maxResults=2500,
+    ).execute()
+    masters = set()
+    for e in res.get("items", []):
+        if (e.get("description") or "").strip() != REMINDER_TAG:
+            continue
+        masters.add(e.get("recurringEventId") or e["id"])
+    for mid in masters:
+        try:
+            svc.events().delete(calendarId="primary", eventId=mid).execute()
+        except Exception:  # noqa: BLE001
+            pass
+    return len(masters)
 
 
 def event_times(ev: dict) -> tuple[str, str]:
