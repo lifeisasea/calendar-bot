@@ -141,13 +141,14 @@ def create_event(
         body["description"] = description
     if category and category.lower() in CATEGORY_COLOR:
         body["colorId"] = CATEGORY_COLOR[category.lower()]
-    if no_reminder:
-        body["reminders"] = {"useDefault": False, "overrides": []}
-    elif reminder_minutes is not None:
+    # По умолчанию НЕ вешаем уведомление Google. Только если явно попросили напоминание.
+    if reminder_minutes is not None and not no_reminder:
         body["reminders"] = {
             "useDefault": False,
             "overrides": [{"method": "popup", "minutes": reminder_minutes}],
         }
+    else:
+        body["reminders"] = {"useDefault": False, "overrides": []}
     return svc.events().insert(calendarId="primary", body=body).execute()
 
 
