@@ -126,10 +126,10 @@ TOOLS = [
     },
     {
         "name": "cancel_reminder",
-        "description": "Отключить напоминание (разовое или повторяющееся) по тексту: «перестань напоминать про воду».",
+        "description": "Отключить напоминание по тексту («перестань напоминать про воду») или ВСЕ сразу (query='все').",
         "input_schema": {
             "type": "object",
-            "properties": {"query": {"type": "string", "description": "Слово/фраза из напоминания"}},
+            "properties": {"query": {"type": "string", "description": "Слово/фраза из напоминания, или 'все' чтобы удалить все"}},
             "required": ["query"],
         },
     },
@@ -292,7 +292,12 @@ def _run_add_recurring_reminder(args: dict) -> str:
 
 
 def _run_cancel_reminder(args: dict) -> str:
-    n = gc.cancel_reminders(args["query"])
+    q = (args.get("query") or "").strip()
+    # «удали все напоминания» — чистим всё
+    if not q or q.lower() in {"все", "всё", "all", "все напоминания", "всё напоминания"}:
+        n = gc.cancel_reminders(None)
+        return f"Удалил все напоминания: {n} ✅" if n else "Напоминаний и так нет 👌"
+    n = gc.cancel_reminders(q)
     return f"Отключено напоминаний: {n} ✅" if n else "Не нашёл такого напоминания."
 
 

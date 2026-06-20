@@ -352,30 +352,32 @@ def create_recurring_reminder(
     raise ValueError(f"неизвестная частота: {freq}")
 
 
-def cancel_reminders(query: str) -> int:
-    """Отменить напоминания (разовые и повторяющиеся), найденные по тексту."""
+def cancel_reminders(query: str | None = None) -> int:
+    """
+    Отменить напоминания. query=None — удалить ВСЕ.
+    Работаем по мастерам серий (singleEvents=False) с листанием, чтобы наверняка.
+    """
     svc = calendar()
-    now = dt.datetime.now(TZ)
     cal_id = reminder_calendar_id()
-    res = svc.events().list(
-        calendarId=cal_id,
-        q=query,
-        timeMin=(now - dt.timedelta(days=1)).isoformat(),
-        timeMax=(now + dt.timedelta(days=400)).isoformat(),
-        singleEvents=True,
-        maxResults=2500,
-    ).execute()
-    masters = set()
-    for e in res.get("items", []):
-        if (e.get("description") or "").strip() != REMINDER_TAG:
-            continue
-        masters.add(e.get("recurringEventId") or e["id"])
-    for mid in masters:
-        try:
-            svc.events().delete(calendarId=cal_id, eventId=mid).execute()
-        except Exception:  # noqa: BLE001
-            pass
-    return len(masters)
+    deleted = 0
+    page = None
+    while True:
+        kwargs = dict(calendarId=cal_id, singleEvents=False, maxResults=250, pageToken=page)
+        if query:
+            kwargs["q"] = query
+        res = svc.events().list(**kwargs).execute()
+        for e in res.get("items", []):
+            if (e.get("description") or "").strip() != REMINDER_TAG:
+                continue
+            try:
+                svc.events().delete(calendarId=cal_id, eventId=e["id"]).execute()
+                deleted += 1
+            except Exception:  # noqa: BLE001
+                pass
+        page = res.get("nextPageToken")
+        if not page:
+            break
+    return deleted
 
 
 def event_times(ev: dict) -> tuple[str, str]:
