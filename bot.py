@@ -269,7 +269,13 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text(reply)
         except Exception as e:  # noqa: BLE001
             log.exception("Ошибка умного режима")
-            await update.message.reply_text(f"Ой, что-то сломалось 😕\n{e}")
+            msg = str(e).lower()
+            if "overload" in msg or "529" in msg or "rate" in msg or "429" in msg:
+                await update.message.reply_text(
+                    "Сервис ИИ сейчас перегружен 😮‍💨 Попробуй, пожалуйста, ещё раз через минуту."
+                )
+            else:
+                await update.message.reply_text(f"Ой, что-то сломалось 😕\n{e}")
         return
 
     try:

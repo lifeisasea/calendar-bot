@@ -20,7 +20,8 @@ _client: Anthropic | None = None
 def client() -> Anthropic:
     global _client
     if _client is None:
-        _client = Anthropic()  # ключ берётся из ANTHROPIC_API_KEY
+        # max_retries — SDK сам повторит при перегрузке (429/529) с нарастающей паузой
+        _client = Anthropic(max_retries=5)  # ключ берётся из ANTHROPIC_API_KEY
     return _client
 
 
